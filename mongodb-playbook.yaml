@@ -1,0 +1,234 @@
+---
+- hosts: mongo_nodes
+  become: yes
+  tasks:
+    - name: Ensure DNS is configured
+      copy:
+        dest: /etc/resolv.conf
+        content: |
+          nameserver 8.8.8.8
+          nameserver 8.8.4.4
+
+    - name: Check if default route exists
+      command: ip route show default
+      register: default_route
+      ignore_errors: yes
+
+    - name: Add IP route if not exists
+      command: ip route add default via 192.168.169.1
+      when: default_route.rc != 0
+
+    - name: Check network connectivity
+      command: ping -c 4 google.com
+      register: ping_result
+      ignore_errors: yes
+
+    - name: Fail if no network connectivity
+      fail:
+        msg: "No network connectivity. Please check your network settings."
+      when: ping_result.rc != 0
+
+    - name: Ensure dpkg is in a consistent state
+      command: sudo dpkg --configure -a
+      ignore_errors: yes
+
+    - name: Wait for dpkg lock to be released
+      shell: |
+        while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do
+          sleep 1
+        done
+
+    - name: Move dpkg lock file
+      command: sudo mv /var/lib/dpkg/lock /var/lib/dpkg/lock.bak
+      ignore_errors: yes
+
+    - name: Update and upgrade apt packages
+      apt:
+        update_cache: yes
+        upgrade: dist
+        force_apt_get: yes
+        allow_unauthenticated: yes
+      register: apt_upgrade_result
+      retries: 5
+      delay: 60
+      until: apt_upgrade_result is success
+
+    - name: Install prerequisites
+      apt:
+        name:
+          - gnupg
+          - curl
+        state: present
+
+    - name: Check if MongoDB public GPG key is already present
+      stat:
+        path: /usr/share/keyrings/mongodb-server-7.0.gpg
+      register: gpg_key
+
+    - name: Import MongoDB public GPG key
+      shell: |
+        curl -fsSL https://pgp.mongodb.com/server-7.0.asc | gpg -o /usr/share/keyrings/mongodb-server-7.0.gpg --dearmor
+      when: not gpg_key.stat.exists
+
+    - name: Add MongoDB repository
+      shell: |
+        echo "deb [ arch=amd64,arm64 signed-by=/usr/share/keyrings/mongodb-server-7.0.gpg ] https://repo.mongodb.com/apt/ubuntu jammy/mongodb-enterprise/7.0 multiverse" | tee /etc/apt/sources.list.d/mongodb-enterprise-7.0.list
+
+    - name: Reload local package database
+      apt:
+        update_cache: yes
+
+    - name: Install MongoDB Enterprise
+      apt:
+        name: mongodb-enterprise
+        state: present
+
+    - name: Install MongoDB client tools
+      apt:
+        name: mongodb-enterprise-tools
+        state: present
+
+    - name: Generate MongoDB key file
+      shell: openssl rand -base64 756 > /etc/mongod.key
+      args:
+        creates: /etc/mongod.key
+
+    - name: Set permissions on MongoDB key file
+      file:
+        path: /etc/mongod.key
+        owner: mongodb
+        group: mongodb
+        mode: '600'
+
+    - name: Distribute MongoDB key file
+      copy:
+        src: /etc/mongod.key
+        dest: /etc/mongod.key
+        owner: mongodb
+        group: mongodb
+        mode: '600'
+        remote_src: yes
+
+    - name: Create MongoDB configuration file without authentication
+      copy:
+        dest: /etc/mongod.conf
+        content: |
+          storage:
+            dbPath: /var/lib/mongodb
+          systemLog:
+            destination: file
+            logAppend: true
+            path: /var/log/mongodb/mongod.log
+          net:
+            port: 27017
+            bindIp: 127.0.0.1,{{ ansible_default_ipv4.address }}
+          replication:
+            replSetName: "rs"
+
+    - name: Restart MongoDB service
+      systemd:
+        name: mongod
+        state: restarted
+
+    - name: Ensure mongod service is running on all nodes
+      systemd:
+        name: mongod
+        state: started
+
+    - name: Allow MongoDB port through firewall
+      ufw:
+        rule: allow
+        port: 27017
+        proto: tcp
+
+    - name: Update /etc/hosts file
+      lineinfile:
+        path: /etc/hosts
+        line: "{{ item }}"
+      with_items:
+        - "192.168.169.101 mongodb0.example.net"
+        - "192.168.169.102 mongodb1.example.net"
+        - "192.168.169.103 mongodb2.example.net"
+
+    - name: Check if MongoDB replicaset is already initialized
+      shell: |
+        mongosh --host mongodb0.example.net --port 27017 --eval 'rs.status().ok'
+      register: rs_status
+      ignore_errors: yes
+
+    - name: Initialize MongoDB replicaset
+      shell: |
+        mongosh --host mongodb0.example.net --port 27017 --eval 'rs.initiate({
+          _id: "rs",
+          members: [
+            { _id: 0, host: "mongodb0.example.net:27017" },
+            { _id: 1, host: "mongodb1.example.net:27017" },
+            { _id: 2, host: "mongodb2.example.net:27017" }
+          ]
+        })'
+      when: rs_status.rc != 0
+
+    - name: Wait for MongoDB primary node to be ready
+      shell: |
+        until mongosh --host mongodb0.example.net --port 27017 --eval 'rs.status().members.filter(m => m.stateStr == "PRIMARY").length > 0' > /dev/null 2>&1; do
+          sleep 10
+        done
+
+    - name: Get primary node hostname
+      shell: |
+        mongosh --host mongodb0.example.net --port 27017 --eval 'rs.status()'
+      register: rs_status_output
+      changed_when: false
+
+    - name: Debug primary node hostname
+      debug:
+        var: rs_status_output.stdout
+
+    - name: Parse primary node hostname
+      set_fact:
+        primary_node: "{{ (rs_status_output.stdout | from_json).members | selectattr('stateStr', 'equalto', 'PRIMARY') | map(attribute='name') | first }}"
+
+    - name: Debug parsed primary node hostname
+      debug:
+        var: primary_node
+
+    - name: Create MongoDB admin user on primary node
+      shell: |
+        mongosh --host {{ primary_node }} --port 27017 --eval 'db.getSiblingDB("admin").createUser({
+          user: "mongoadmin",
+          pwd: "Passw0rd999!",
+          roles: [{ role: "root", db: "admin" }]
+        })'
+      when: primary_node is defined and primary_node != ""
+
+    - name: Update MongoDB configuration to enable authentication
+      copy:
+        dest: /etc/mongod.conf
+        content: |
+          storage:
+            dbPath: /var/lib/mongodb
+          systemLog:
+            destination: file
+            logAppend: true
+            path: /var/log/mongodb/mongod.log
+          net:
+            port: 27017
+            bindIp: 127.0.0.1,{{ ansible_default_ipv4.address }}
+          replication:
+            replSetName: "rs"
+          security:
+            authorization: "enabled"
+            keyFile: "/etc/mongod.key"
+
+    - name: Restart MongoDB service with authentication
+      systemd:
+        name: mongod
+        state: restarted
+
+    - name: Wait for MongoDB primary node to be ready after restart
+      shell: |
+        timeout 600 bash -c 'until mongosh --host {{ primary_node }} --port 27017 --username mongoadmin --password Passw0rd999! --authenticationDatabase admin --eval "rs.status().members.filter(m => m.stateStr == \"PRIMARY\").length > 0" > /dev/null 2>&1; do
+          sleep 10
+        done'
+      register: wait_result
+      failed_when: wait_result.rc != 0
