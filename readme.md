@@ -5,6 +5,8 @@ This repository is to build out a demo environment for evaluation and developmen
 - Deploy 3 Linux VMs (Ubuntu 22.04 tested) into a vSphere environment using Terraform 
 - Using those 3 Linux VMs, Provision a MongoDB replicaset using Ansible 
 
+![](mongodb-tf-ansible.png)
+
 ## Edit main.tf 
 
 Bad practice but ease and speed was the name of the game. All variables are found here for your vSphere environment. Edit this file to suit your environment, also make sure 
