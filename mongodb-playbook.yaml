@@ -1,3 +1,4 @@
+
 ---
 - hosts: mongo_nodes
   become: yes
@@ -176,7 +177,7 @@
 
     - name: Get primary node hostname
       shell: |
-        mongosh --host mongodb0.example.net --port 27017 --eval 'rs.status()'
+        mongosh --host mongodb0.example.net --port 27017 --quiet --eval 'JSON.stringify(rs.status())'
       register: rs_status_output
       changed_when: false
 
@@ -200,6 +201,7 @@
           roles: [{ role: "root", db: "admin" }]
         })'
       when: primary_node is defined and primary_node != ""
+      ignore_errors: yes
 
     - name: Update MongoDB configuration to enable authentication
       copy:

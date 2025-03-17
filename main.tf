@@ -1,3 +1,4 @@
+
 provider "vsphere" {
   user           = "administrator@vzilla.local"
   password       = "Passw0rd999!"
@@ -12,7 +13,7 @@ data "vsphere_datacenter" "dc" {
 }
 
 data "vsphere_datastore" "datastore" {
-  name          = "NETGEAR716"
+  name          = "VMware_NFS_716"
   datacenter_id = data.vsphere_datacenter.dc.id
 }
 
@@ -26,9 +27,14 @@ data "vsphere_network" "network" {
   datacenter_id = data.vsphere_datacenter.dc.id
 }
 
-data "vsphere_virtual_machine" "template" {
-  name          = "ubuntu-2204"
-  datacenter_id = data.vsphere_datacenter.dc.id
+data "vsphere_content_library" "library" {
+  name = "vZilla-Content-Library"
+}
+
+data "vsphere_content_library_item" "template" {
+  name		= "linux-ubuntu-22.04-lts-v0.22.0"
+  library_id	= data.vsphere_content_library.library.id
+  type		= "ovf" 
 }
 
 resource "vsphere_virtual_machine" "vm" {
@@ -40,7 +46,7 @@ resource "vsphere_virtual_machine" "vm" {
   
   num_cpus = 2
   memory   = 4096
-  guest_id = data.vsphere_virtual_machine.template.guest_id
+  guest_id = "ubuntu64Guest"
 
   network_interface {
     network_id   = data.vsphere_network.network.id
@@ -49,13 +55,13 @@ resource "vsphere_virtual_machine" "vm" {
 
   disk {
     label            = "disk0"
-    size             = data.vsphere_virtual_machine.template.disks.0.size
+    size             = 50
     eagerly_scrub    = false
     thin_provisioned = true
   }
 
   clone {
-    template_uuid = data.vsphere_virtual_machine.template.id
+    template_uuid = data.vsphere_content_library_item.template.id
     timeout = "120"
 
     customize {

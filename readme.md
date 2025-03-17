@@ -38,6 +38,10 @@ as well as being able to SSH to them if this was configured in the template.
 
 ## Ansible time 
 
+Before we get going we will also need a community collection for ufw control we can get this with 
+
+`ansible-galaxy collection install community.general`
+
 Confirm that you have the inventory file updated with your own environment information. 
 
 `ansible-playbook -i inventory.ini mongodb-playbook.yaml` 
