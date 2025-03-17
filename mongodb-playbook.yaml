@@ -18,9 +18,14 @@
           nameserver 8.8.8.8
           nameserver 8.8.4.4
 
-    - name: Ensure default route exists
+    - name: Check if default route exists
+      command: ip route show default
+      register: default_route
+      ignore_errors: yes
+
+    - name: Add IP route if not exists
       command: ip route add default via 192.168.169.1
-      when: "'default' not in ansible_facts['routes']"
+      when: default_route.rc != 0
 
     - name: Check network connectivity
       command: ping -c 4 google.com
@@ -75,26 +80,33 @@
         state: present
 
     # ---------- Keyfile Handling ----------
-    - name: Generate MongoDB key file on primary node (only once)
-      shell: openssl rand -base64 756 > {{ mongo_keyfile_path }}
+
+    # ---------- Keyfile Handling ----------
+    - name: Generate MongoDB key file on first node and fetch it
+      shell: openssl rand -base64 756 > /etc/mongod.key
       args:
-        creates: "{{ mongo_keyfile_path }}"
-      delegate_to: "{{ mongo_primary_host }}"
+        creates: /etc/mongod.key
+      delegate_to: "{{ groups['mongo_nodes'][0] }}"
+      run_once: true
+      when: not ansible_check_mode
 
-    - name: Fetch MongoDB key file from primary node
+    - name: Fetch MongoDB key file to control machine
       fetch:
-        src: "{{ mongo_keyfile_path }}"
-        dest: "{{ mongo_keyfile_local_path }}"
+        src: /etc/mongod.key
+        dest: ./mongod.key
         flat: yes
-      delegate_to: "{{ mongo_primary_host }}"
+      delegate_to: "{{ groups['mongo_nodes'][0] }}"
+      run_once: true
+      when: not ansible_check_mode
 
-    - name: Distribute MongoDB key file to all nodes
+    - name: Copy MongoDB key file to all nodes
       copy:
-        src: "{{ mongo_keyfile_local_path }}"
-        dest: "{{ mongo_keyfile_path }}"
+        src: ./mongod.key
+        dest: /etc/mongod.key
         owner: mongodb
         group: mongodb
-        mode: '400'
+        mode: '0600'
+      when: not ansible_check_mode
 
     # ---------- MongoDB Configuration ----------
     - name: Create MongoDB configuration file
