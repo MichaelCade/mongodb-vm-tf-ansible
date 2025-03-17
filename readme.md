@@ -51,4 +51,11 @@ this will run through the tasks to get to the point where MongoDB can be install
 *Note at the time of writing this the primary could end up being any of the 3 machines, so in order to add the authentication to the machines we have to connect to the 
 primary to add the new user, I need ansible to be able to dynamically learn which VM is the master in the replicaset and then proceed with the creation. 
 
+## Veeam time 
+If you are using this for repeat Veeam demos then you will need to remove the existing ssh known hosts, I tend to use notepad to remove the domain name and IP addresses > saving and then I tend to reconnect via SSH to each of the 3 nodes, I then import the known_hosts into Veeam and then under inventory you can trust the 3 new machines. 
+
+You will also need to edit the protection group as the rs is going to be referring to the last replicaset, just remove in wizard and then readd using one of the nodes. 
+
+
+
 Remember, this is only for demo purposes, please nobody should use such code in their production environments!  
